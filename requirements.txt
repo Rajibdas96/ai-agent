@@ -1,0 +1,6 @@
+pypdf
+scikit-learn
+edge-tts
+pygame
+SpeechRecognition
+PyAudio
