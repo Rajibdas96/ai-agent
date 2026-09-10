@@ -1,50 +1,52 @@
-import speech_recognition as sr
+from voice_engine import VoiceEngine
 
-recognizer = sr.Recognizer()
 
-print("🎤 Microphone test")
-print("Speak something...")
+voice = VoiceEngine()
 
-with sr.Microphone() as source:
 
-    recognizer.adjust_for_ambient_noise(
-        source,
-        duration=1
-    )
+print("================================")
+print("      STUDY AI VOICE TEST")
+print("================================")
 
-    print("🎤 Listening...")
+print()
+print("Testing microphone...")
+print("Say something after 'Listening...'")
+print()
 
-    audio = recognizer.listen(
-        source,
-        timeout=5,
-        phrase_time_limit=10
-    )
 
 try:
 
-    print("🧠 Converting speech to text...")
+    text = voice.listen()
 
-    text = recognizer.recognize_google(
-        audio
-    )
+    if text:
 
-    print("\nYou said:")
-    print(text)
+        print()
+        print("You said:")
+        print(text)
 
-except sr.UnknownValueError:
+        print()
+        print("Testing AI voice...")
 
-    print(
-        "\n❌ I couldn't understand your speech."
-    )
+        voice.speak(
+            f"You said: {text}"
+        )
 
-except sr.RequestError as error:
+        print()
+        print("Voice test successful.")
 
-    print(
-        f"\n❌ Speech recognition service error: {error}"
-    )
+    else:
+
+        print()
+        print("I couldn't understand you.")
+
 
 except Exception as error:
 
-    print(
-        f"\n❌ Error: {error}"
-    )
+    print()
+    print("VOICE ERROR:")
+    print(error)
+
+
+finally:
+
+    voice.cleanup()

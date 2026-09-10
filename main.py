@@ -1,1003 +1,1513 @@
-import os
-import re
-import asyncio
+import sys
+from pathlib import Path
 
-import pypdf
-import edge_tts
-import pygame
-import speech_recognition as sr
+from PySide6.QtCore import (
+    Qt,
+    QObject,
+    QRunnable,
+    QThreadPool,
+    Signal,
+)
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from study_engi import StudyEngine
+from answer_engine import AnswerEngine
 
-# CONFIGURATION
+try:
+    from voice_engine import VoiceEngine
+    VOICE_AVAILABLE = True
+except Exception:
+    VoiceEngine = None
+    VOICE_AVAILABLE = False
 
-PDF_FOLDER = "pdfs"
 
-VOICE = "en-IN-NeerjaNeural"
-VOICE_RATE = "-5%"
+# ================================================================
+# PATHS
+# ================================================================
 
-TOP_RESULTS = 5
+BASE_DIR = Path(__file__).resolve().parent
+PDF_FOLDER = BASE_DIR / "pdfs"
 
-DEFAULT_MAX_WORDS = 150
-BRIEF_MAX_WORDS = 60
-DETAILED_MAX_WORDS = 300
 
-AUDIO_FILE = "ai_answer.mp3"
+# ================================================================
+# WORKER SIGNALS
+# ================================================================
 
-MIC_TIMEOUT = 5
-PHRASE_TIME_LIMIT = 10
+class WorkerSignals(QObject):
 
-# GLOBAL DATA
+    finished = Signal(object)
+    error = Signal(str)
 
-documents = []
-vectorizer = None
-document_matrix = None
 
-recognizer = sr.Recognizer()
+# ================================================================
+# BACKGROUND WORKER
+# ================================================================
 
-# PDF LOADING
+class Worker(QRunnable):
 
-def load_pdfs():
-    """
-    Read all PDF files from the pdfs folder.
+    def __init__(self, function):
 
-    Each page becomes a searchable document.
-    """
+        super().__init__()
 
-    global documents
+        self.function = function
+        self.signals = WorkerSignals()
 
-    documents = []
-
-    if not os.path.exists(PDF_FOLDER):
-        os.makedirs(PDF_FOLDER)
-
-        print(f"\n📁 Created '{PDF_FOLDER}' folder.")
-        print("Put your PDF files inside it and run 'reload'.")
-
-        return
-
-    pdf_files = [
-        file
-        for file in os.listdir(PDF_FOLDER)
-        if file.lower().endswith(".pdf")
-    ]
-
-    if not pdf_files:
-        print("\n⚠️ No PDF files found.")
-        print(f"Put your PDFs inside the '{PDF_FOLDER}' folder.")
-
-        return
-
-    print("\n📚 Loading PDFs...")
-
-    for filename in pdf_files:
-
-        path = os.path.join(PDF_FOLDER, filename)
+    def run(self):
 
         try:
 
-            reader = pypdf.PdfReader(path)
+            result = self.function()
 
-            print(f"   📖 {filename}")
-
-            for page_number, page in enumerate(reader.pages, start=1):
-
-                try:
-                    text = page.extract_text()
-                except Exception:
-                    text = ""
-
-                if not text:
-                    continue
-
-                text = clean_text(text)
-
-                if len(text.strip()) < 20:
-                    continue
-
-                # Split page into smaller chunks.
-                chunks = split_into_chunks(text)
-
-                for chunk in chunks:
-
-                    documents.append(
-                        {
-                            "text": chunk,
-                            "filename": filename,
-                            "page": page_number
-                        }
-                    )
+            self.signals.finished.emit(
+                result
+            )
 
         except Exception as error:
 
-            print(
-                f"   ❌ Could not read {filename}: {error}"
+            self.signals.error.emit(
+                str(error)
             )
 
-    print(
-        f"\n✅ Loaded {len(documents)} searchable sections."
-    )
 
-# TEXT CLEANING
+# ================================================================
+# MAIN WINDOW
+# ================================================================
 
-def clean_text(text):
-    """
-    Clean extracted PDF text.
-    """
+class StudyAI(QMainWindow):
 
-    text = text.replace("\n", " ")
-    text = text.replace("\r", " ")
-    text = re.sub(r"\s+", " ", text)
+    def __init__(self):
 
-    return text.strip()
+        super().__init__()
 
-# CHUNKING
-
-def split_into_chunks(text, words_per_chunk=180):
-    """
-    Split large PDF pages into smaller searchable sections.
-    """
-
-    words = text.split()
-
-    chunks = []
-
-    for i in range(0, len(words), words_per_chunk):
-
-        chunk = " ".join(
-            words[i:i + words_per_chunk]
+        self.setWindowTitle(
+            "Study AI"
         )
 
-        if chunk.strip():
-            chunks.append(chunk)
-
-    return chunks
-
-# BUILD SEARCH INDEX
-
-def build_index():
-
-    global vectorizer
-    global document_matrix
-
-    if not documents:
-        vectorizer = None
-        document_matrix = None
-        return
-
-    print("\n🧠 Building search index...")
-
-    texts = [
-        document["text"]
-        for document in documents
-    ]
-
-    vectorizer = TfidfVectorizer(
-        lowercase=True,
-        stop_words="english",
-        ngram_range=(1, 2),
-        sublinear_tf=True
-    )
-
-    document_matrix = vectorizer.fit_transform(texts)
-
-    print("✅ Search index ready.")
-
-# RELOAD PDFs
-
-def reload_pdfs():
-
-    print("\n🔄 Reloading PDFs...")
-
-    load_pdfs()
-    build_index()
-
-    print("\n✅ PDFs reloaded.")
-
-# QUESTION LENGTH
-
-def get_answer_length(question):
-
-    question_lower = question.lower()
-
-    brief_words = [
-        "brief",
-        "briefly",
-        "short",
-        "shortly",
-        "in short",
-        "one line"
-    ]
-
-    detailed_words = [
-        "detailed",
-        "detail",
-        "deeply",
-        "explain fully",
-        "in detail"
-    ]
-
-    exam_words = [
-        "exam",
-        "marks",
-        "5 marks",
-        "10 marks",
-        "answer"
-    ]
-
-    for phrase in brief_words:
-
-        if phrase in question_lower:
-            return BRIEF_MAX_WORDS
-
-    for phrase in detailed_words:
-
-        if phrase in question_lower:
-            return DETAILED_MAX_WORDS
-
-    for phrase in exam_words:
-
-        if phrase in question_lower:
-            return 250
-
-    return DEFAULT_MAX_WORDS
-
-# WORD LIMIT
-
-def limit_words(text, max_words):
-
-    words = text.split()
-
-    if len(words) <= max_words:
-        return text.strip()
-
-    shortened = " ".join(
-        words[:max_words]
-    )
-
-    # Try to finish naturally.
-    last_period = shortened.rfind(".")
-    last_question = shortened.rfind("?")
-    last_exclamation = shortened.rfind("!")
-
-    last_sentence = max(
-        last_period,
-        last_question,
-        last_exclamation
-    )
-
-    if last_sentence > max_words * 3:
-        shortened = shortened[:last_sentence + 1]
-
-    else:
-        shortened += "..."
-
-    return shortened.strip()
-
-# SENTENCE SPLITTING
-
-def split_sentences(text):
-
-    text = clean_text(text)
-
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text
-    )
-
-    return [
-        sentence.strip()
-        for sentence in sentences
-        if sentence.strip()
-    ]
-
-# REMOVE DUPLICATE SENTENCES
-
-def remove_duplicate_sentences(sentences):
-
-    unique = []
-
-    seen = set()
-
-    for sentence in sentences:
-
-        normalized = re.sub(
-            r"\s+",
-            " ",
-            sentence.lower()
-        ).strip()
-
-        if normalized in seen:
-            continue
-
-        seen.add(normalized)
-        unique.append(sentence)
-
-    return unique
-
-# SEARCH PDF
-
-def search_pdfs(question):
-
-    if not documents:
-        return []
-
-    if vectorizer is None or document_matrix is None:
-        return []
-
-    question_vector = vectorizer.transform(
-        [question]
-    )
-
-    scores = cosine_similarity(
-        question_vector,
-        document_matrix
-    ).flatten()
-
-    ranked_indexes = scores.argsort()[::-1]
-
-    results = []
-
-    for index in ranked_indexes:
-
-        score = scores[index]
-
-        if score <= 0:
-            continue
-
-        document = documents[index]
-
-        results.append(
-            {
-                "text": document["text"],
-                "filename": document["filename"],
-                "page": document["page"],
-                "score": float(score)
-            }
+        self.resize(
+            1250,
+            780
         )
 
-        if len(results) >= TOP_RESULTS:
-            break
+        self.thread_pool = QThreadPool.globalInstance()
 
-    return results
-
-# EXTRACT BEST SENTENCES
-
-def extract_best_sentences(question, results):
-
-    if not results:
-        return []
-
-    all_sentences = []
-
-    for result in results:
-
-        sentences = split_sentences(
-            result["text"]
+        self.engine = StudyEngine(
+            PDF_FOLDER
         )
 
-        for sentence in sentences:
+        self.answer_engine = AnswerEngine()
 
-            if len(sentence.split()) < 4:
-                continue
+        self.voice = None
+        self.voice_available = False
+        self.voice_speaking = False
 
-            all_sentences.append(
-                {
-                    "text": sentence,
-                    "filename": result["filename"],
-                    "page": result["page"]
-                }
-            )
+        # --------------------------------------------------------
+        # VOICE
+        # --------------------------------------------------------
 
-    if not all_sentences:
-        return []
-
-    sentence_texts = [
-        item["text"]
-        for item in all_sentences
-    ]
-
-    try:
-
-        sentence_vectorizer = TfidfVectorizer(
-            lowercase=True,
-            stop_words="english",
-            ngram_range=(1, 2),
-            sublinear_tf=True
-        )
-
-        sentence_matrix = sentence_vectorizer.fit_transform(
-            sentence_texts + [question]
-        )
-
-        question_vector = sentence_matrix[-1]
-
-        sentence_scores = cosine_similarity(
-            question_vector,
-            sentence_matrix[:-1]
-        ).flatten()
-
-    except Exception:
-
-        sentence_scores = [
-            0
-            for _ in all_sentences
-        ]
-
-    ranked = []
-
-    for i, item in enumerate(all_sentences):
-
-        ranked.append(
-            {
-                "text": item["text"],
-                "filename": item["filename"],
-                "page": item["page"],
-                "score": float(sentence_scores[i])
-            }
-        )
-
-    ranked.sort(
-        key=lambda x: x["score"],
-        reverse=True
-    )
-
-    return ranked
-
-# BUILD ANSWER FROM PDF
-
-def create_answer(question):
-
-    results = search_pdfs(question)
-
-    if not results:
-        return None, []
-
-    sentences = extract_best_sentences(
-        question,
-        results
-    )
-
-    if not sentences:
-        return None, results
-
-    max_words = get_answer_length(question)
-
-    selected_sentences = []
-
-    current_words = 0
-
-    for sentence in sentences:
-
-        sentence_words = len(
-            sentence["text"].split()
-        )
-
-        if current_words + sentence_words > max_words:
-            continue
-
-        selected_sentences.append(sentence)
-
-        current_words += sentence_words
-
-        if current_words >= max_words:
-            break
-
-        # Usually 3-6 sentences is enough.
-        if len(selected_sentences) >= 6:
-            break
-
-    if not selected_sentences:
-
-        selected_sentences = sentences[:1]
-
-    answer_sentences = [
-        item["text"]
-        for item in selected_sentences
-    ]
-
-    answer_sentences = remove_duplicate_sentences(
-        answer_sentences
-    )
-
-    answer = " ".join(
-        answer_sentences
-    )
-
-    answer = limit_words(
-        answer,
-        max_words
-    )
-
-    # Sources used by selected sentences.
-    sources = []
-
-    for item in selected_sentences:
-
-        source = (
-            item["filename"],
-            item["page"]
-        )
-
-        if source not in sources:
-            sources.append(source)
-
-    return answer, sources
-
-# SPEECH CLEANING
-
-def clean_for_speech(text):
-
-    text = text.replace("*", "")
-    text = text.replace("_", "")
-
-    text = text.replace("•", "")
-    text = text.replace("●", "")
-    text = text.replace("▪", "")
-
-    text = text.replace("\n", " ")
-    text = text.replace("\r", " ")
-
-    text = text.replace(";", ",")
-    text = text.replace(":", ",")
-
-    text = text.replace("?", ".")
-    text = text.replace("!", ".")
-
-    text = text.replace("(", " ")
-    text = text.replace(")", " ")
-
-    text = text.replace("[", " ")
-    text = text.replace("]", " ")
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+([.,])",
-        r"\1",
-        text
-    )
-
-    text = re.sub(
-        r"([.,])(?=\S)",
-        r"\1 ",
-        text
-    )
-
-    text = re.sub(
-        r",{2,}",
-        ",",
-        text
-    )
-
-    text = re.sub(
-        r"\.{2,}",
-        ".",
-        text
-    )
-
-    return text.strip()
-
-# GENERATE VOICE
-
-async def generate_voice(text, audio_file):
-
-    communicate = edge_tts.Communicate(
-        text=text,
-        voice=VOICE,
-        rate=VOICE_RATE
-    )
-
-    await communicate.save(
-        audio_file
-    )
-
-# SPEAK
-
-def speak(text):
-
-    speech_text = clean_for_speech(
-        text
-    )
-
-    if not speech_text:
-        return
-
-    try:
-
-        if os.path.exists(AUDIO_FILE):
+        if VOICE_AVAILABLE:
 
             try:
-                os.remove(AUDIO_FILE)
+
+                self.voice = VoiceEngine()
+
+                self.voice_available = True
+
+            except Exception as error:
+
+                print(
+                    f"Voice unavailable: {error}"
+                )
+
+                self.voice_available = False
+
+        # --------------------------------------------------------
+        # BUILD UI
+        # --------------------------------------------------------
+
+        self.build_ui()
+        self.apply_styles()
+
+        self.set_status(
+            "Loading your PDF library..."
+        )
+
+        self.load_library_async()
+
+    # ============================================================
+    # UI
+    # ============================================================
+
+    def build_ui(self):
+
+        central = QWidget()
+
+        self.setCentralWidget(
+            central
+        )
+
+        main_layout = QHBoxLayout(
+            central
+        )
+
+        main_layout.setContentsMargins(
+            0,
+            0,
+            0,
+            0
+        )
+
+        main_layout.setSpacing(
+            0
+        )
+
+        # ========================================================
+        # SIDEBAR
+        # ========================================================
+
+        sidebar = QFrame()
+
+        sidebar.setObjectName(
+            "sidebar"
+        )
+
+        sidebar.setFixedWidth(
+            290
+        )
+
+        sidebar_layout = QVBoxLayout(
+            sidebar
+        )
+
+        sidebar_layout.setContentsMargins(
+            20,
+            25,
+            20,
+            20
+        )
+
+        # Logo
+        logo = QLabel(
+            "Study AI"
+        )
+
+        logo.setObjectName(
+            "logo"
+        )
+
+        sidebar_layout.addWidget(
+            logo
+        )
+
+        subtitle = QLabel(
+            "Your PDF Study Assistant"
+        )
+
+        subtitle.setObjectName(
+            "sidebarSubtitle"
+        )
+
+        sidebar_layout.addWidget(
+            subtitle
+        )
+
+        sidebar_layout.addSpacing(
+            25
+        )
+
+        # Library heading
+        library_title = QLabel(
+            "YOUR LIBRARY"
+        )
+
+        library_title.setObjectName(
+            "sectionTitle"
+        )
+
+        sidebar_layout.addWidget(
+            library_title
+        )
+
+        # PDF list
+        self.library_list = QListWidget()
+
+        self.library_list.setObjectName(
+            "libraryList"
+        )
+
+        sidebar_layout.addWidget(
+            self.library_list,
+            1
+        )
+
+        # Buttons
+        self.add_button = QPushButton(
+            "+  Add PDF"
+        )
+
+        self.add_button.clicked.connect(
+            self.add_pdf
+        )
+
+        sidebar_layout.addWidget(
+            self.add_button
+        )
+
+        self.delete_button = QPushButton(
+            "Delete Selected"
+        )
+
+        self.delete_button.clicked.connect(
+            self.delete_selected_pdf
+        )
+
+        sidebar_layout.addWidget(
+            self.delete_button
+        )
+
+        self.reload_button = QPushButton(
+            "↻  Reload Library"
+        )
+
+        self.reload_button.clicked.connect(
+            self.reload_library
+        )
+
+        sidebar_layout.addWidget(
+            self.reload_button
+        )
+
+        main_layout.addWidget(
+            sidebar
+        )
+
+        # ========================================================
+        # CONTENT AREA
+        # ========================================================
+
+        content = QWidget()
+
+        content_layout = QVBoxLayout(
+            content
+        )
+
+        content_layout.setContentsMargins(
+            35,
+            30,
+            35,
+            25
+        )
+
+        content_layout.setSpacing(
+            18
+        )
+
+        # --------------------------------------------------------
+        # HEADER
+        # --------------------------------------------------------
+
+        header_layout = QHBoxLayout()
+
+        title = QLabel(
+            "Ask your study material"
+        )
+
+        title.setObjectName(
+            "pageTitle"
+        )
+
+        header_layout.addWidget(
+            title
+        )
+
+        header_layout.addStretch()
+
+        self.status_label = QLabel(
+            "Ready"
+        )
+
+        self.status_label.setObjectName(
+            "statusLabel"
+        )
+
+        header_layout.addWidget(
+            self.status_label
+        )
+
+        content_layout.addLayout(
+            header_layout
+        )
+
+        # ========================================================
+        # QUESTION CARD
+        # ========================================================
+
+        question_card = QFrame()
+
+        question_card.setObjectName(
+            "card"
+        )
+
+        question_layout = QVBoxLayout(
+            question_card
+        )
+
+        question_layout.setContentsMargins(
+            22,
+            20,
+            22,
+            20
+        )
+
+        # Question heading
+        question_label = QLabel(
+            "Question"
+        )
+
+        question_label.setObjectName(
+            "cardTitle"
+        )
+
+        question_layout.addWidget(
+            question_label
+        )
+
+        # Input row
+        input_row = QHBoxLayout()
+
+        self.question_input = QTextEdit()
+
+        self.question_input.setPlaceholderText(
+            "Ask something from your PDFs..."
+        )
+
+        self.question_input.setFixedHeight(
+            95
+        )
+
+        input_row.addWidget(
+            self.question_input,
+            1
+        )
+
+        # Voice
+        self.voice_button = QPushButton(
+            "🎤"
+        )
+
+        self.voice_button.setObjectName(
+            "voiceButton"
+        )
+
+        self.voice_button.setFixedSize(
+            55,
+            55
+        )
+
+        self.voice_button.setToolTip(
+            "Ask using your microphone"
+        )
+
+        self.voice_button.clicked.connect(
+            self.start_voice_question
+        )
+
+        input_row.addWidget(
+            self.voice_button,
+            alignment=Qt.AlignBottom
+        )
+
+        question_layout.addLayout(
+            input_row
+        )
+
+        # --------------------------------------------------------
+        # OPTIONS
+        # --------------------------------------------------------
+
+        options_row = QHBoxLayout()
+
+        # Answer type
+        answer_type_label = QLabel(
+            "Answer Type"
+        )
+
+        answer_type_label.setObjectName(
+            "optionLabel"
+        )
+
+        options_row.addWidget(
+            answer_type_label
+        )
+
+        self.answer_type_combo = QComboBox()
+
+        self.answer_type_combo.addItems(
+            self.answer_engine.ANSWER_TYPES
+        )
+
+        self.answer_type_combo.setCurrentText(
+            "Auto"
+        )
+
+        options_row.addWidget(
+            self.answer_type_combo
+        )
+
+        options_row.addSpacing(
+            20
+        )
+
+        # Marks
+        marks_label = QLabel(
+            "Marks"
+        )
+
+        marks_label.setObjectName(
+            "optionLabel"
+        )
+
+        options_row.addWidget(
+            marks_label
+        )
+
+        self.marks_combo = QComboBox()
+
+        self.marks_combo.addItems(
+            self.answer_engine.MARK_OPTIONS
+        )
+
+        self.marks_combo.setCurrentText(
+            "Auto"
+        )
+
+        options_row.addWidget(
+            self.marks_combo
+        )
+
+        options_row.addStretch()
+
+        # Ask button
+        self.ask_button = QPushButton(
+            "Ask"
+        )
+
+        self.ask_button.setObjectName(
+            "askButton"
+        )
+
+        self.ask_button.setFixedWidth(
+            130
+        )
+
+        self.ask_button.clicked.connect(
+            self.ask_question
+        )
+
+        options_row.addWidget(
+            self.ask_button
+        )
+
+        question_layout.addLayout(
+            options_row
+        )
+
+        content_layout.addWidget(
+            question_card
+        )
+
+        # ========================================================
+        # ANSWER CARD
+        # ========================================================
+
+        answer_card = QFrame()
+
+        answer_card.setObjectName(
+            "card"
+        )
+
+        answer_layout = QVBoxLayout(
+            answer_card
+        )
+
+        answer_layout.setContentsMargins(
+            22,
+            20,
+            22,
+            20
+        )
+
+        # Header
+        answer_header = QHBoxLayout()
+
+        answer_title = QLabel(
+            "Answer"
+        )
+
+        answer_title.setObjectName(
+            "cardTitle"
+        )
+
+        answer_header.addWidget(
+            answer_title
+        )
+
+        answer_header.addStretch()
+
+        self.answer_type_label = QLabel(
+            ""
+        )
+
+        self.answer_type_label.setObjectName(
+            "answerBadge"
+        )
+
+        answer_header.addWidget(
+            self.answer_type_label
+        )
+
+        self.speak_button = QPushButton(
+            "🔊 Speak"
+        )
+
+        self.speak_button.clicked.connect(
+            self.speak_answer
+        )
+
+        answer_header.addWidget(
+            self.speak_button
+        )
+
+        self.stop_button = QPushButton(
+            "⏹ Stop"
+        )
+
+        self.stop_button.clicked.connect(
+            self.stop_speaking
+        )
+
+        answer_header.addWidget(
+            self.stop_button
+        )
+
+        answer_layout.addLayout(
+            answer_header
+        )
+
+        # Answer box
+        self.answer_box = QTextEdit()
+
+        self.answer_box.setReadOnly(
+            True
+        )
+
+        self.answer_box.setPlaceholderText(
+            "Your exam-ready answer will appear here..."
+        )
+
+        answer_layout.addWidget(
+            self.answer_box,
+            1
+        )
+
+        # Sources
+        source_title = QLabel(
+            "Sources"
+        )
+
+        source_title.setObjectName(
+            "sourceTitle"
+        )
+
+        answer_layout.addWidget(
+            source_title
+        )
+
+        self.sources_label = QLabel(
+            "No sources yet."
+        )
+
+        self.sources_label.setObjectName(
+            "sourcesLabel"
+        )
+
+        self.sources_label.setWordWrap(
+            True
+        )
+
+        answer_layout.addWidget(
+            self.sources_label
+        )
+
+        content_layout.addWidget(
+            answer_card,
+            1
+        )
+
+        # ========================================================
+        # STATUS
+        # ========================================================
+
+        footer = QLabel(
+            "Local PDF search • No AI model required"
+        )
+
+        footer.setObjectName(
+            "footer"
+        )
+
+        content_layout.addWidget(
+            footer
+        )
+
+        main_layout.addWidget(
+            content,
+            1
+        )
+
+    # ============================================================
+    # STYLES
+    # ============================================================
+
+    def apply_styles(self):
+
+        self.setStyleSheet(
+            """
+            * {
+                font-family: "Segoe UI";
+            }
+
+            QMainWindow {
+                background: #f5f7f5;
+            }
+
+            #sidebar {
+                background: #142016;
+            }
+
+            #logo {
+                color: white;
+                font-size: 27px;
+                font-weight: 700;
+            }
+
+            #sidebarSubtitle {
+                color: #aebcaf;
+                font-size: 13px;
+            }
+
+            #sectionTitle {
+                color: #8fa28f;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+
+            #libraryList {
+                background: transparent;
+                border: none;
+                color: #e7eee7;
+                font-size: 14px;
+                outline: none;
+            }
+
+            #libraryList::item {
+                padding: 12px;
+                border-radius: 8px;
+                margin-bottom: 3px;
+            }
+
+            #libraryList::item:selected {
+                background: #28532d;
+            }
+
+            QPushButton {
+                background: #e7ece7;
+                border: none;
+                border-radius: 9px;
+                padding: 10px 14px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            QPushButton:hover {
+                background: #d9e2d9;
+            }
+
+            #sidebar QPushButton {
+                background: #243726;
+                color: white;
+            }
+
+            #sidebar QPushButton:hover {
+                background: #304a32;
+            }
+
+            #pageTitle {
+                font-size: 26px;
+                font-weight: 700;
+                color: #172117;
+            }
+
+            #statusLabel {
+                color: #657365;
+                font-size: 13px;
+            }
+
+            #card {
+                background: white;
+                border: 1px solid #e0e5e0;
+                border-radius: 16px;
+            }
+
+            #cardTitle {
+                font-size: 17px;
+                font-weight: 700;
+                color: #1c281c;
+            }
+
+            QTextEdit {
+                background: #fafcf9;
+                border: 1px solid #dce3dc;
+                border-radius: 10px;
+                padding: 12px;
+                color: #1b241b;
+                font-size: 14px;
+                selection-background-color: #b8d6b9;
+            }
+
+            #answer_box {
+                line-height: 1.5;
+            }
+
+            #voiceButton {
+                font-size: 21px;
+                border-radius: 27px;
+                background: #eaf3ea;
+            }
+
+            #voiceButton:hover {
+                background: #dcebdc;
+            }
+
+            QComboBox {
+                background: #fafcf9;
+                border: 1px solid #dce3dc;
+                border-radius: 8px;
+                padding: 9px 12px;
+                min-width: 120px;
+            }
+
+            #optionLabel {
+                color: #536153;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            #askButton {
+                background: #1f6b2a;
+                color: white;
+                font-size: 14px;
+                padding: 11px 20px;
+                border-radius: 9px;
+            }
+
+            #askButton:hover {
+                background: #185722;
+            }
+
+            #answerBadge {
+                background: #e8f2e8;
+                color: #28632f;
+                border-radius: 8px;
+                padding: 7px 10px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            #sourceTitle {
+                color: #3d4b3d;
+                font-size: 13px;
+                font-weight: 700;
+            }
+
+            #sourcesLabel {
+                color: #6a756a;
+                font-size: 12px;
+            }
+
+            #footer {
+                color: #8a948a;
+                font-size: 11px;
+            }
+            """
+        )
+
+    # ============================================================
+    # STATUS
+    # ============================================================
+
+    def set_status(self, text):
+
+        self.status_label.setText(
+            text
+        )
+
+    # ============================================================
+    # LIBRARY LOADING
+    # ============================================================
+
+    def load_library_async(self):
+
+        self.set_status(
+            "Indexing PDFs..."
+        )
+
+        self.set_controls_enabled(
+            False
+        )
+
+        worker = Worker(
+            self.engine.reload
+        )
+
+        worker.signals.finished.connect(
+            self.library_loaded
+        )
+
+        worker.signals.error.connect(
+            self.worker_error
+        )
+
+        self.thread_pool.start(
+            worker
+        )
+
+    def library_loaded(self, library):
+
+        self.library_list.clear()
+
+        for file_info in library:
+
+            filename = file_info[
+                "filename"
+            ]
+
+            pages = file_info[
+                "pages"
+            ]
+
+            item = QListWidgetItem(
+                f"📄 {filename}\n"
+                f"   {pages} page(s)"
+            )
+
+            item.setData(
+                Qt.UserRole,
+                filename
+            )
+
+            self.library_list.addItem(
+                item
+            )
+
+        self.set_controls_enabled(
+            True
+        )
+
+        self.set_status(
+            f"{len(library)} PDF(s) loaded"
+        )
+
+    # ============================================================
+    # ADD PDF
+    # ============================================================
+
+    def add_pdf(self):
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Add PDF",
+            "",
+            "PDF Files (*.pdf)"
+        )
+
+        if not file_path:
+            return
+
+        self.set_status(
+            "Adding PDF..."
+        )
+
+        self.set_controls_enabled(
+            False
+        )
+
+        worker = Worker(
+            lambda: self.engine.add_pdf(
+                file_path
+            )
+        )
+
+        worker.signals.finished.connect(
+            self.pdf_added
+        )
+
+        worker.signals.error.connect(
+            self.worker_error
+        )
+
+        self.thread_pool.start(
+            worker
+        )
+
+    def pdf_added(self, filename):
+
+        self.load_library_async()
+
+        self.set_status(
+            f"Added {filename}"
+        )
+
+    # ============================================================
+    # DELETE PDF
+    # ============================================================
+
+    def delete_selected_pdf(self):
+
+        item = self.library_list.currentItem()
+
+        if item is None:
+
+            QMessageBox.information(
+                self,
+                "Delete PDF",
+                "Please select a PDF first."
+            )
+
+            return
+
+        filename = item.data(
+            Qt.UserRole
+        )
+
+        answer = QMessageBox.question(
+            self,
+            "Delete PDF",
+            f"Delete '{filename}'?",
+            QMessageBox.Yes
+            | QMessageBox.No
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        self.set_status(
+            "Deleting PDF..."
+        )
+
+        self.set_controls_enabled(
+            False
+        )
+
+        worker = Worker(
+            lambda: self.engine.delete_pdf(
+                filename
+            )
+        )
+
+        worker.signals.finished.connect(
+            lambda _: self.library_loaded(
+                self.engine.get_library()
+            )
+        )
+
+        worker.signals.error.connect(
+            self.worker_error
+        )
+
+        self.thread_pool.start(
+            worker
+        )
+
+    # ============================================================
+    # RELOAD
+    # ============================================================
+
+    def reload_library(self):
+
+        self.load_library_async()
+
+    # ============================================================
+    # ASK QUESTION
+    # ============================================================
+
+    def ask_question(self):
+
+        question = (
+            self.question_input
+            .toPlainText()
+            .strip()
+        )
+
+        if not question:
+
+            QMessageBox.information(
+                self,
+                "Question",
+                "Please enter a question."
+            )
+
+            return
+
+        if not self.engine.chunks:
+
+            QMessageBox.information(
+                self,
+                "No PDFs",
+                "Please add a PDF first."
+            )
+
+            return
+
+        answer_type = (
+            self.answer_type_combo
+            .currentText()
+        )
+
+        marks = (
+            self.marks_combo
+            .currentText()
+        )
+
+        self.set_status(
+            "Finding the best information..."
+        )
+
+        self.ask_button.setEnabled(
+            False
+        )
+
+        self.voice_button.setEnabled(
+            False
+        )
+
+        self.answer_box.clear()
+
+        self.sources_label.setText(
+            "Searching..."
+        )
+
+        worker = Worker(
+            lambda: self.generate_answer(
+                question,
+                answer_type,
+                marks
+            )
+        )
+
+        worker.signals.finished.connect(
+            self.answer_ready
+        )
+
+        worker.signals.error.connect(
+            self.worker_error
+        )
+
+        self.thread_pool.start(
+            worker
+        )
+
+    def generate_answer(
+        self,
+        question,
+        answer_type,
+        marks
+    ):
+
+        results = self.engine.search_diverse(
+            question,
+            top_k=10
+        )
+
+        return self.answer_engine.create_answer(
+            question,
+            results,
+            answer_type,
+            marks
+        )
+
+    # ============================================================
+    # ANSWER READY
+    # ============================================================
+
+    def answer_ready(self, result):
+
+        answer = result.get(
+            "answer",
+            ""
+        )
+
+        answer_type = result.get(
+            "answer_type",
+            "Auto"
+        )
+
+        marks = result.get(
+            "marks",
+            "Auto"
+        )
+
+        sources = result.get(
+            "sources",
+            []
+        )
+
+        self.answer_box.setPlainText(
+            answer
+        )
+
+        badge = answer_type
+
+        if marks != "Auto":
+            badge += f" • {marks}"
+
+        self.answer_type_label.setText(
+            badge
+        )
+
+        # --------------------------------------------------------
+        # SOURCES
+        # --------------------------------------------------------
+
+        if sources:
+
+            source_lines = []
+
+            for source in sources:
+
+                source_lines.append(
+                    f"📄 {source['filename']} "
+                    f"— Page {source['page']}"
+                )
+
+            self.sources_label.setText(
+                "\n".join(source_lines)
+            )
+
+        else:
+
+            self.sources_label.setText(
+                "No source information available."
+            )
+
+        self.set_status(
+            "Answer ready"
+        )
+
+        self.ask_button.setEnabled(
+            True
+        )
+
+        self.voice_button.setEnabled(
+            self.voice_available
+        )
+
+    # ============================================================
+    # VOICE QUESTION
+    # ============================================================
+
+    def start_voice_question(self):
+
+        if not self.voice_available:
+
+            QMessageBox.warning(
+                self,
+                "Voice unavailable",
+                "Voice features are not available."
+            )
+
+            return
+
+        self.set_status(
+            "Listening..."
+        )
+
+        self.voice_button.setEnabled(
+            False
+        )
+
+        self.ask_button.setEnabled(
+            False
+        )
+
+        worker = Worker(
+            self.voice.listen
+        )
+
+        worker.signals.finished.connect(
+            self.voice_question_received
+        )
+
+        worker.signals.error.connect(
+            self.worker_error
+        )
+
+        self.thread_pool.start(
+            worker
+        )
+
+    def voice_question_received(
+        self,
+        question
+    ):
+
+        if question:
+
+            self.question_input.setPlainText(
+                question
+            )
+
+            self.set_status(
+                "Voice question received"
+            )
+
+            self.ask_button.setEnabled(
+                True
+            )
+
+            self.ask_question()
+
+        else:
+
+            self.set_status(
+                "I couldn't understand you."
+            )
+
+            self.ask_button.setEnabled(
+                True
+            )
+
+            self.voice_button.setEnabled(
+                self.voice_available
+            )
+
+    # ============================================================
+    # TEXT TO SPEECH
+    # ============================================================
+
+    def speak_answer(self):
+
+        if not self.voice_available:
+            return
+
+        answer = (
+            self.answer_box
+            .toPlainText()
+            .strip()
+        )
+
+        if not answer:
+
+            QMessageBox.information(
+                self,
+                "Speak",
+                "There is no answer to speak."
+            )
+
+            return
+
+        self.set_status(
+            "Speaking..."
+        )
+
+        self.voice_speaking = True
+
+        self.speak_button.setEnabled(
+            False
+        )
+
+        worker = Worker(
+            lambda: self.voice.speak(
+                self.clean_for_speech(
+                    answer
+                )
+            )
+        )
+
+        worker.signals.finished.connect(
+            self.speech_finished
+        )
+
+        worker.signals.error.connect(
+            self.worker_error
+        )
+
+        self.thread_pool.start(
+            worker
+        )
+
+    def clean_for_speech(self, text):
+
+        # Remove visual formatting.
+        text = re.sub(
+            r"[*_#]",
+            "",
+            text
+        )
+
+        text = text.replace(
+            "•",
+            ""
+        )
+
+        text = re.sub(
+            r"\n+",
+            ". ",
+            text
+        )
+
+        text = re.sub(
+            r"\s+",
+            " ",
+            text
+        )
+
+        return text.strip()
+
+    def speech_finished(self, _):
+
+        self.voice_speaking = False
+
+        self.speak_button.setEnabled(
+            self.voice_available
+        )
+
+        self.set_status(
+            "Ready"
+        )
+
+    def stop_speaking(self):
+
+        if self.voice_available:
+
+            try:
+                self.voice.stop()
 
             except Exception:
                 pass
 
-        print("\n🔊 Generating voice...")
+            self.voice_speaking = False
 
-        asyncio.run(
-            generate_voice(
-                speech_text,
-                AUDIO_FILE
-            )
-        )
-
-        if not os.path.exists(AUDIO_FILE):
-
-            print(
-                "❌ Voice file was not created."
+            self.speak_button.setEnabled(
+                True
             )
 
-            return
-
-        if os.path.getsize(AUDIO_FILE) == 0:
-
-            print(
-                "❌ Voice file is empty."
+            self.set_status(
+                "Speech stopped"
             )
 
-            os.remove(AUDIO_FILE)
+    # ============================================================
+    # ENABLE / DISABLE CONTROLS
+    # ============================================================
 
-            return
+    def set_controls_enabled(self, enabled):
 
-        print("🔊 Playing answer...")
-
-        pygame.mixer.init()
-
-        pygame.mixer.music.load(
-            AUDIO_FILE
+        self.add_button.setEnabled(
+            enabled
         )
 
-        pygame.mixer.music.play()
-
-        while pygame.mixer.music.get_busy():
-
-            pygame.time.Clock().tick(10)
-
-        pygame.mixer.music.unload()
-
-        pygame.mixer.quit()
-
-        if os.path.exists(AUDIO_FILE):
-            os.remove(AUDIO_FILE)
-
-    except Exception as error:
-
-        print(
-            f"\n❌ Voice error: {error}"
+        self.delete_button.setEnabled(
+            enabled
         )
 
-        try:
-            pygame.mixer.quit()
-        except Exception:
-            pass
-
-# MICROPHONE
-
-def setup_microphone():
-
-    print("\n🎤 Preparing microphone...")
-
-    try:
-
-        with sr.Microphone() as source:
-
-            print(
-                "🎤 Calibrating for background noise..."
-            )
-
-            recognizer.adjust_for_ambient_noise(
-                source,
-                duration=1
-            )
-
-        # Make speech detection responsive.
-        recognizer.pause_threshold = 0.6
-        recognizer.phrase_threshold = 0.2
-        recognizer.non_speaking_duration = 0.3
-
-        print("✅ Microphone ready.")
-
-    except Exception as error:
-
-        print(
-            f"⚠️ Microphone setup failed: {error}"
+        self.reload_button.setEnabled(
+            enabled
         )
 
-# LISTEN
-
-def listen():
-
-    try:
-
-        with sr.Microphone() as source:
-
-            print("\n🎤 Listening...")
-
-            audio = recognizer.listen(
-                source,
-                timeout=MIC_TIMEOUT,
-                phrase_time_limit=PHRASE_TIME_LIMIT
-            )
-
-        print(
-            "🧠 Converting speech to text..."
+        self.ask_button.setEnabled(
+            enabled
         )
 
-        text = recognizer.recognize_google(
-            audio
+        self.voice_button.setEnabled(
+            enabled
+            and self.voice_available
         )
 
-        text = text.strip()
+    # ============================================================
+    # ERROR
+    # ============================================================
 
-        if text:
+    def worker_error(self, message):
 
-            print(
-                f"\nYou: {text}"
-            )
-
-        return text
-
-    except sr.WaitTimeoutError:
-
-        print(
-            "⏱️ No speech detected."
+        self.set_controls_enabled(
+            True
         )
 
-        return ""
-
-    except sr.UnknownValueError:
-
-        print(
-            "❌ I couldn't understand that."
+        self.set_status(
+            "Something went wrong"
         )
 
-        return ""
-
-    except sr.RequestError as error:
-
-        print(
-            f"❌ Speech recognition error: {error}"
+        QMessageBox.critical(
+            self,
+            "Error",
+            message
         )
 
-        return ""
+    # ============================================================
+    # CLOSE
+    # ============================================================
 
-    except Exception as error:
+    def closeEvent(self, event):
 
-        print(
-            f"❌ Microphone error: {error}"
-        )
+        if self.voice_available:
 
-        return ""
+            try:
+                self.voice.cleanup()
 
-# ASK STUDY AI
+            except Exception:
+                pass
 
-def ask_ai(question):
+        event.accept()
 
-    print("\n🔎 Searching your PDFs...")
 
-    answer, sources = create_answer(
-        question
-    )
-
-    if not answer:
-
-        print(
-            "\n🤖 Study AI:"
-        )
-
-        print(
-            "I could not find relevant information "
-            "in your PDF files."
-        )
-
-        print(
-            "\n💡 Try asking the question using "
-            "different words."
-        )
-
-        speak(
-            "I could not find relevant information "
-            "in your PDF files."
-        )
-
-        return
-
-    print("\n🤖 Study AI:\n")
-
-    print(answer)
-
-    if sources:
-
-        print("\n📚 Sources:")
-
-        for filename, page in sources:
-
-            print(
-                f"   • {filename} "
-                f"(page {page})"
-            )
-
-    print("\n🔊 Speaking...")
-
-    speak(answer)
-
-# SHOW PDF INFORMATION
-
-def show_pdf_info():
-
-    if not documents:
-
-        print(
-            "\n📚 No PDF content loaded."
-        )
-
-        return
-
-    files = {}
-
-    for document in documents:
-
-        filename = document["filename"]
-
-        if filename not in files:
-            files[filename] = set()
-
-        files[filename].add(
-            document["page"]
-        )
-
-    print("\n📚 Your study material:")
-
-    for filename, pages in files.items():
-
-        print(
-            f"   • {filename} "
-            f"({len(pages)} pages)"
-        )
-
-    print(
-        f"\n📖 Searchable sections: "
-        f"{len(documents)}"
-    )
-
+# ================================================================
 # MAIN
+# ================================================================
 
 def main():
 
-    print("=" * 60)
-
-    print(
-        "📚 STUDY AI"
+    app = QApplication(
+        sys.argv
     )
 
-    print(
-        "PDF Search + Voice Assistant"
+    app.setApplicationName(
+        "Study AI"
     )
 
-    print("=" * 60)
+    window = StudyAI()
 
-    print(
-        "\n🚫 No LLM"
+    window.show()
+
+    sys.exit(
+        app.exec()
     )
 
-    print(
-        "📖 Answers come directly from your PDFs."
-    )
-
-    # Load PDFs.
-    load_pdfs()
-
-    # Build search index.
-    build_index()
-
-    # Prepare microphone.
-    setup_microphone()
-
-    while True:
-
-        print("\n" + "=" * 60)
-
-        print("Choose input:")
-
-        print("1 → 🎤 Speak")
-
-        print("2 → ⌨️ Type")
-
-        print("3 → 📚 Show PDFs")
-
-        print("4 → 🔄 Reload PDFs")
-
-        print("5 → 🚪 Exit")
-
-        choice = input(
-            "\nChoice: "
-        ).strip()
-
-        # VOICE
-
-        if choice == "1":
-
-            question = listen()
-
-            if not question:
-                continue
-
-        # TEXT
-        
-        elif choice == "2":
-
-            question = input(
-                "\nYou: "
-            ).strip()
-
-            if not question:
-                continue
-
-        
-        # SHOW PDF INFO
-        
-
-        elif choice == "3":
-
-            show_pdf_info()
-
-            continue
-
-        
-        # RELOAD
-        
-
-        elif choice == "4":
-
-            reload_pdfs()
-
-            continue
-
-    
-        # EXIT
-        
-
-        elif choice == "5":
-
-            print(
-                "\n👋 Goodbye. Keep studying!"
-            )
-
-            break
-
-        else:
-
-            print(
-                "\n❌ Please choose 1, 2, 3, 4, or 5."
-            )
-
-            continue
-
-        
-        # SPECIAL COMMAND
-        
-
-        if question.lower() == "reload":
-
-            reload_pdfs()
-
-            continue
-
-        
-        # ASK
-        
-
-        ask_ai(question)
-
-
-# PROGRAM START
 
 if __name__ == "__main__":
-
     main()
