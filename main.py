@@ -1,4 +1,5 @@
 import sys
+import re
 from pathlib import Path
 
 from PySide6.QtCore import (
