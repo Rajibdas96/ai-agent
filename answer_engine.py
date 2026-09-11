@@ -123,9 +123,9 @@ class AnswerEngine:
             "15 Marks": 450,
         }
 
-    # ============================================================
+    
     # BASIC CLEANING
-    # ============================================================
+    
 
     @staticmethod
     def clean_sentence(sentence):
@@ -158,9 +158,9 @@ class AnswerEngine:
 
         return sentence.strip()
 
-    # ============================================================
+    
     # SENTENCE SPLITTING
-    # ============================================================
+    
 
     @staticmethod
     def split_sentences(text):
@@ -196,9 +196,9 @@ class AnswerEngine:
 
         return result
 
-    # ============================================================
+    
     # DUPLICATE REMOVAL
-    # ============================================================
+    
 
     @staticmethod
     def normalize(sentence):
@@ -238,12 +238,12 @@ class AnswerEngine:
 
         return list(unique.values())
 
-    # ============================================================
+    
     # LOCAL PARAPHRASING (no LLM)
     # Applied only at the point text is written into the final
     # answer - rank_sentences / find_definition always see the raw
     # PDF text, so indicator-phrase matching stays accurate.
-    # ============================================================
+    
 
     @staticmethod
     def strip_filler(sentence):
@@ -286,9 +286,9 @@ class AnswerEngine:
         cleaned = self.paraphrase_sentence(cleaned, rng)
         return cleaned
 
-    # ============================================================
+    
     # QUESTION TYPE DETECTION
-    # ============================================================
+    
 
     def detect_answer_type(self, question):
 
@@ -377,10 +377,9 @@ class AnswerEngine:
 
         return "Exam"
 
-    # ============================================================
+    
     # DETERMINE WORD LIMIT
-    # ============================================================
-
+    
     def get_word_limit(self, answer_type, marks):
 
         if marks in self.lengths:
@@ -404,9 +403,9 @@ class AnswerEngine:
             180
         )
 
-    # ============================================================
+    
     # REMOVE QUESTION-LIKE / BAD SENTENCES
-    # ============================================================
+    
 
     @staticmethod
     def is_good_sentence(sentence):
@@ -441,9 +440,9 @@ class AnswerEngine:
 
         return True
 
-    # ============================================================
+    
     # RANK SENTENCES
-    # ============================================================
+    
 
     def rank_sentences(self, question, results):
 
@@ -558,9 +557,9 @@ class AnswerEngine:
 
         return candidates
 
-    # ============================================================
+    
     # WORD LIMIT
-    # ============================================================
+    
 
     @staticmethod
     def limit_words(text, max_words):
@@ -591,9 +590,9 @@ class AnswerEngine:
 
         return shortened.strip()
 
-    # ============================================================
+    
     # EXTRACT KEY SENTENCES
-    # ============================================================
+    
 
     def select_sentences(
         self,
@@ -657,9 +656,9 @@ class AnswerEngine:
 
         return selected
 
-    # ============================================================
+    
     # FIND DEFINITION SENTENCE
-    # ============================================================
+    
 
     def find_definition(self, question, ranked):
         """Pick the most definition-like sentence out of `ranked`.
@@ -755,9 +754,9 @@ class AnswerEngine:
 
         return None
 
-    # ============================================================
+    
     # TITLE
-    # ============================================================
+    
 
     def make_title(self, question):
 
@@ -788,9 +787,9 @@ class AnswerEngine:
 
         return q[0].upper() + q[1:]
 
-    # ============================================================
+    
     # FORMAT BULLETS
-    # ============================================================
+    
 
     @staticmethod
     def bullet_list(sentences):
@@ -800,9 +799,9 @@ class AnswerEngine:
             for sentence in sentences
         )
 
-    # ============================================================
+    
     # BUILD DEFINITION ANSWER
-    # ============================================================
+    
 
     def build_definition(
         self,
@@ -864,9 +863,9 @@ class AnswerEngine:
             max_words
         )
 
-    # ============================================================
+    
     # BUILD SHORT ANSWER
-    # ============================================================
+    
 
     def build_short(
         self,
@@ -892,9 +891,9 @@ class AnswerEngine:
             max_words
         )
 
-    # ============================================================
+    
     # BUILD EXAM ANSWER
-    # ============================================================
+    
 
     def build_exam(
         self,
@@ -1018,9 +1017,9 @@ class AnswerEngine:
             max_words
         )
 
-    # ============================================================
+    
     # BUILD ADVANTAGES / DISADVANTAGES
-    # ============================================================
+    
 
     def build_points_answer(
         self,
@@ -1060,9 +1059,9 @@ class AnswerEngine:
             max_words
         )
 
-    # ============================================================
+    
     # BUILD STEPS ANSWER
-    # ============================================================
+    
 
     def build_steps(
         self,
@@ -1108,9 +1107,9 @@ class AnswerEngine:
             max_words
         )
 
-    # ============================================================
+    
     # BUILD DIFFERENCE ANSWER
-    # ============================================================
+    
 
     def build_difference(
         self,
@@ -1152,9 +1151,9 @@ class AnswerEngine:
             max_words
         )
 
-    # ============================================================
+    
     # FORMATTED WORD LIMIT
-    # ============================================================
+    
 
     @staticmethod
     def limit_formatted_words(
@@ -1226,9 +1225,9 @@ class AnswerEngine:
 
         return output
 
-    # ============================================================
+    
     # SOURCES
-    # ============================================================
+    
 
     @staticmethod
     def get_sources(ranked):
@@ -1271,9 +1270,9 @@ class AnswerEngine:
 
         return sources
 
-    # ============================================================
+    
     # MAIN ANSWER FUNCTION
-    # ============================================================
+    
 
     def create_answer(
         self,
@@ -1341,10 +1340,9 @@ class AnswerEngine:
 
         rng = random.Random(seed)
 
-        # ========================================================
+        
         # ANSWER TYPE ROUTING
-        # ========================================================
-
+        
         if detected_type == "Definition":
 
             answer = self.build_definition(

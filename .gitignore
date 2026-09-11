@@ -1,6 +1,9 @@
 .env
 main.cpython-313.pyc
-mictest.py
 answer_engine.cpython-313.pyc
 study_engi.cpython-313.pyc
 voice_engine.cpython-313.pyc
+build/
+dist/
+venv/
+main.spec

@@ -9,9 +9,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-# ================================================================
+
 # ANSWER-STYLE TUNING (no LLM anywhere below - pure TF-IDF + rules)
-# ================================================================
+
 DEFAULT_MAX_WORDS = 150
 BRIEF_MAX_WORDS = 60
 DETAILED_MAX_WORDS = 300
@@ -22,9 +22,9 @@ WORDS_PER_MARK = 40
 MIN_EXAM_WORDS = 50
 MAX_EXAM_WORDS = 400
 
-CANDIDATE_POOL = 40          # top-scoring sentences considered per question
-MAX_SELECTED_SENTENCES = 8   # hard cap regardless of word budget
-MMR_LAMBDA = 0.7             # 1.0 = pure relevance, 0.0 = pure diversity
+CANDIDATE_POOL = 40
+MAX_SELECTED_SENTENCES = 8
+MMR_LAMBDA = 0.7
 SYNONYM_REPLACEMENT_RATE = 0.85
 
 # Textbook narration that doesn't belong in an answer.
@@ -117,9 +117,9 @@ class StudyEngine:
 
         self.loaded = False
 
-    # ============================================================
+    
     # TEXT CLEANING
-    # ============================================================
+    
 
     @staticmethod
     def clean_text(text):
@@ -170,9 +170,9 @@ class StudyEngine:
         text = re.sub(r"[^a-z0-9 ]", "", text)
         return text.strip()
 
-    # ============================================================
+    
     # PDF HEADER / FOOTER CLEANING
-    # ============================================================
+    
 
     def remove_repeated_lines(self, pages):
         """
@@ -239,9 +239,9 @@ class StudyEngine:
 
         return result
 
-    # ============================================================
+    
     # CHUNKING
-    # ============================================================
+    
 
     @staticmethod
     def split_into_chunks(text, chunk_size=180, overlap=35):
@@ -282,9 +282,9 @@ class StudyEngine:
 
         return chunks
 
-    # ============================================================
+    
     # SENTENCE SPLITTING
-    # ============================================================
+    
 
     @staticmethod
     def split_sentences(text):
@@ -326,9 +326,9 @@ class StudyEngine:
 
         return restored
 
-    # ============================================================
+    
     # LOAD PDFS
-    # ============================================================
+    
 
     def load_pdfs(self):
         self.documents = []
@@ -402,9 +402,9 @@ class StudyEngine:
 
         return self.get_library()
 
-    # ============================================================
+    
     # BUILD TF-IDF INDEX
-    # ============================================================
+    
 
     def build_index(self):
 
@@ -428,9 +428,9 @@ class StudyEngine:
 
         self.matrix = self.vectorizer.fit_transform(texts)
 
-    # ============================================================
+    
     # RELOAD
-    # ============================================================
+    
 
     def reload(self):
 
@@ -441,9 +441,9 @@ class StudyEngine:
 
         return self.load_pdfs()
 
-    # ============================================================
+    
     # SEARCH
-    # ============================================================
+    
 
     def search(self, question, top_k=8):
 
@@ -491,9 +491,9 @@ class StudyEngine:
 
         return results
 
-    # ============================================================
+    
     # SEARCH WITH DIVERSITY
-    # ============================================================
+    
 
     def search_diverse(self, question, top_k=8):
 
@@ -539,9 +539,9 @@ class StudyEngine:
 
         return selected
 
-    # ============================================================
+    
     # ANSWER STYLE (brief / detailed / exam / default)
-    # ============================================================
+    
 
     def detect_marks(self, question):
         """'5 marks' / '10 marks' -> a target word count. None if absent."""
@@ -579,9 +579,9 @@ class StudyEngine:
 
         return {"style": "default", "max_words": DEFAULT_MAX_WORDS}
 
-    # ============================================================
+    
     # WORD LIMIT
-    # ============================================================
+    
 
     @staticmethod
     def limit_words(text, max_words):
@@ -604,9 +604,9 @@ class StudyEngine:
 
         return shortened.strip()
 
-    # ============================================================
+    
     # FILLER STRIPPING + LOCAL PARAPHRASING (no LLM)
-    # ============================================================
+    
 
     @staticmethod
     def strip_filler(sentence):
@@ -648,13 +648,13 @@ class StudyEngine:
 
         return result
 
-    # ============================================================
+    
     # DIVERSE SENTENCE SELECTION (Maximal Marginal Relevance)
     # search_diverse() already spreads results across different pages;
     # this adds a second, semantic layer of diversity at the sentence
     # level, since two different pages can still repeat the same
     # sentence (e.g. a definition restated in two chapters).
-    # ============================================================
+    
 
     def select_diverse_sentences(self, candidates, candidate_vectors, max_words):
         selected_idx = []
@@ -710,10 +710,10 @@ class StudyEngine:
 
         return " ".join(display_texts)
 
-    # ============================================================
+    
     # CREATE ANSWER - the missing piece: turns retrieved chunks into
     # an actual written answer. No LLM/API call anywhere in here.
-    # ============================================================
+    
 
     def create_answer(self, question):
         style_info = self.get_answer_style(question)
@@ -816,9 +816,9 @@ class StudyEngine:
 
         return answer, sources
 
-    # ============================================================
+    
     # LIBRARY
-    # ============================================================
+    
 
     def get_library(self):
 
@@ -843,9 +843,9 @@ class StudyEngine:
             )
         ]
 
-    # ============================================================
+    
     # DELETE PDF
-    # ============================================================
+    
 
     def delete_pdf(self, filename):
 
@@ -863,9 +863,9 @@ class StudyEngine:
 
         self.reload()
 
-    # ============================================================
+    
     # ADD PDF
-    # ============================================================
+    
 
     def add_pdf(self, source_path):
 
