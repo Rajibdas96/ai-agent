@@ -162,51 +162,6 @@ Because it does not use a generative language model, it does not freely rewrite 
 
 This is intentional: the goal is to keep study answers grounded in the user's source material.
 
-## Project Structure
-
-```text
-ai-agent/
-│
-├── .github/
-│   └── workflows/
-│       └── build-windows.yml
-│
-├── pdfs/
-│
-├── tests/
-│
-├── answer_engine.py
-├── main.py
-├── study_engine.py
-├── voice_engine.py
-│
-├── .gitignore
-├── LICENSE
-├── README.md
-├── requirements.txt
-└── build_windows.bat
-```
-
-## Building for Windows
-
-Install PyInstaller:
-
-```powershell
-python -m pip install pyinstaller
-```
-
-Then run:
-
-```powershell
-build_windows.bat
-```
-
-The Windows executable will be generated in:
-
-```text
-dist/
-```
-
 ## License
 
 MIT License
